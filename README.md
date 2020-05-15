@@ -5,7 +5,9 @@ This post deals with machine learning problem of prediction. The goal of this do
 1. EDA to inform how we will do feature engineering 
 
 2. Feature engineering process 
+
     a. Categoical Variable:
+    
     - Dummy Encoding
     - One Hot Encoding
     - Label Encoding
@@ -17,6 +19,7 @@ This post deals with machine learning problem of prediction. The goal of this do
       - Embedding
 
     b. Numeric Variable:
+    
     - Centering, Scaling, Standardizing, Normalizing
     - Univariate Transformation: log/square root/inverse, Box-Cox, Yeo-Johnson
     - Basis Expansions: Splines, GAM, MARS
@@ -33,9 +36,11 @@ This post deals with machine learning problem of prediction. The goal of this do
       - Bagged Trees
 
     d. Interaction:
+    
     - Interaction search methods
 
     e. Text Data:
+    
     - Bag of Words
     - Word Embedding
       - Word2Vec
