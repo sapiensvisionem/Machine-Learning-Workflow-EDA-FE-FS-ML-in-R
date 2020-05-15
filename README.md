@@ -43,19 +43,19 @@ This post deals with machine learning problem of prediction. The goal of this do
 
 3. Modeling
 
-Using Caret library in R, I created a wrapper function that automates regression with a single line of code. It takes in two arguments: data and location where it will store results in csv and rds format. The function runs 30 different statistical and machine learning algorithms from linear regression to neural network. The function returns the following four items in the given location:
+    Using Caret library in R, I created a wrapper function that automates regression with a single line of code. It takes in two arguments: data and location where it will store results in csv and rds format. The function runs 30 different statistical and machine learning algorithms from linear regression to neural network. The function returns the following four items in the given location:
 
-  a. summary table of evaluation metrics (R-squared, RMSE) of every regression model on test set
-  
-  b. predicted outputs of every regression model on test set
-  
-  c. variable importance plot of every regression model
-  
-  d. best hyperparameters on grid search
-  
-    - Linear Models
-    - Discriminants
-    - Support Vector Machines
-    - Tree Models
-    - Neural Networks
+      a. summary table of evaluation metrics (R-squared, RMSE) of every regression model on test set
+
+      b. predicted outputs of every regression model on test set
+
+      c. variable importance plot of every regression model
+
+      d. best hyperparameters on grid search
+
+        - Linear Models
+        - Discriminants
+        - Support Vector Machines
+        - Tree Models
+        - Neural Networks
 
