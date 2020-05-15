@@ -1,0 +1,590 @@
+---
+title: "Feature Engineering - Numeric Variable"
+author: "Ji Hun Lee"
+date: "April 28, 2020"
+output: html_document
+---
+
+# Feature Engineering Order of Steps
+While problems needs may vary, here is an order of potential steps that should work for most problems:
+
+1. Impute
+2. *Individual transformations for skewness and other issues*
+3. *Discretize (if needed and if you have no other choice)*
+4. Create dummy variables, Feature Hashing, Category Encoding
+5. Create interactions
+6. *Normalization steps (center, scale, range, etc)*
+7. *Multivariate transformation (e.g. PCA, spatial sign, AutoEncoder etc)*
+8. Embedding
+
+
+## Load Libraries
+
+```{r}
+library(embed)
+library(FeatureHashing)
+library(tidyverse)
+library(tidymodels)
+```
+
+## TidyModel Main Functions 
+1. recipe: create a preprocessing object
+2. step_X: preprocessing functions
+3. prep: fit a recipe object to data to obtain parameters
+4. bake/juice: transform data using fitted recipe
+
+### Preprocessing Functions
+```{r}
+ls("package:recipes", pattern = "^step_")
+```
+
+# Numeric Variable
+Numeric variable is on a continuous scale and is subject to a host of potential issues that we need to confront. We want to convert numeric predictors into a form tat models can better utilize
+KNN and SVM are sensitive to predictors with skewed distributions or outliers.
+
+
+# Scaling
+Deal with predictors that are on very different scales. Centering subtracts mean from predictor. Scaling is dividing a variable by standard deviation. Range scaling uses minimum and maximum value to translate data to be within an arbitrary range. We require these statistics to be estimated from training set and are applied to test set or new samples. When we compute distance or dot products between predictors such as KNN or SVM, we require variables to be on a common scale in order to apply a penalty (L1 and L2).
+```{r}
+# step_center() # mean 0
+# step_scale() # standard deviation 1
+# step_normalize() # standardization
+# step_range() # set the min and max
+
+
+```
+
+
+# Transformation
+We want to deal with predictors that follow a skewed distribution where a small proportion of samples are orders of magnitude larger than the majority of data. Box-Cox transformation uses maximum likelihood estimation to estimate a transformation parameter lambda. It is flexible in its ability to address many different data distributions. However, it can only handle strictly positive distributions. Yeo-Johnson is an analogous procedure that can be used on any numeric data. A skewed distribution can have a harmful effect on models like linear models, neural networks, and SVM since the tails of the distribution can dominate the underlying calculations.
+```{r}
+# step_BoxCox()
+# step_YeoJohnson()
+# step_log()
+# step_sqrt()
+# step_inverse()
+# step_invlogit()
+# step_ratio()
+data("segmentationData")
+segmentationData$Cell <- NULL
+segmentationData <- segmentationData[, c("EqSphereAreaCh1", "PerimCh1", "Class", "Case")]
+names(segmentationData)[1:2] <- paste0("Predictor", LETTERS[1:2])
+
+example_train <- subset(segmentationData, Case == "Train")
+example_test  <- subset(segmentationData, Case == "Test")
+
+example_train$Case <- NULL
+example_test$Case  <- NULL
+
+simple_trans_rec <- recipe(Class ~ ., data = example_train) %>%
+  step_BoxCox(PredictorA, PredictorB) %>%
+  prep(training = example_train)
+
+simple_trans_test <- bake(simple_trans_rec, example_test)
+pred_b_lambda <-
+  tidy(simple_trans_rec, number = 1) %>% 
+  filter(terms == "PredictorB") %>% 
+  select(value)
+
+bc_before <- ggplot(example_test, aes(x = PredictorB)) + 
+  geom_histogram(bins = 35, col = "blue", fill = "blue", alpha = .6) + 
+  xlab("Predictor B") + 
+  ggtitle("(a)")
+bc_after <- ggplot(simple_trans_test, aes(x = PredictorB)) + 
+  geom_histogram(bins = 35, col = "red", fill = "red", alpha = .6) + 
+  xlab("Predictor B (inverse)") + 
+  ggtitle("(b)")
+
+```
+
+
+# Basis Expansion
+We do a transformation on a single numeric predictor to expand it to many predictors. A basis expansion is applying a set of functions that can be combined using a linear combination. The original column is augmented by new features by - for example - squaring and cubing it. 
+We want to transform predictors that have a complex relationship with the response and be truly predictive but cannot be adequately represented with a simple function or extracted by sophisticated models. For basis expansion, we use splines and they create different regions of the predictor space whose boundaries are called knots. We connect all the functions at the knots with specialized functions to ensure an overall continuous function. The number of knots controls the number of regions and also the potential complexity of the function. The smoothing spline models commonly used are polynomial spline, cubic spline, smoothling spline, Generalized Additive Model (GAM), and Multivariate Adaptive Regression Spline (MARS).
+```{r}
+# step_bs
+# step_ns
+
+
+```
+
+# Discretize
+We can translate a quantitative variable into a set of two or more qualitative buckets. This is a relatively controversial technique because it has a few advantages but brings serious disadvantages. Its benefits are 1) it simplifies the analysis 2) binning avoids the problem of havving to visualize predictor. However, it reduces the variation in the data. The issues are 1) it is unlikely the underlying trend is consistent with the new model. 2) When a real trend exists, discretizing the data is mot likely making it harder for the model to do an effective job since all of the nuance in the data has been removed. 3) there is no objective rationale for specific cut point. 4) It is possible an arbitrary binning point can discover an erroneous trend. The binning process must be inside resampling process or it tends to overfit.
+```{r}
+# step_discretize()
+```
+
+# Isomap
+It is a form of multidimensionality scaling (MDS).
+```{r}
+# step_isomap()
+
+```
+
+# Dimensionality Reduction
+We want to contain only relevant and remove overly redundant information. We can more effectively and efficiently represent these predictors with a smaller, consolidated number of new predictors while still preserving or enhancing then ew predictors' relationship with the response. Dimensionality reduction methods can correct collinearity.  Including the irrelevant predictors can have detrimental effects on the final model in three ways: 1) increase computational power 2) decrease predictive performance 3) complicating predictor importance calcalation.
+
+## Linear Projection Methods
+The methos below are linear in the sense that they take a matrix of numeric predictor values and create new components that are linear combinations of the original data. These components are called scores. Generally this approach finds a smaller and more efficient subspace of the original predictors.
+
+1. Principal Component Analysis
+Find linear combination of original predictors such that combinations summarize the maximal amount of variation in the original predictor space. In statistics, variation is synonymous with information, so we create a subspace that contains information relevant to the original data. Also, the new scores are orthogonal to one another, so they are not correlated to one another. This is useful for models such as linear regression, neural network, SVM, and others.
+
+2. Kernel Principal Component Analysis
+Combines kernel trick with PCA to expand the dimension of the predictor space in which dimension reuction is performed. It can provide a good predictive relationship between the predictors and the response is non-linear.
+
+3. Independent Component Analysis
+ICA creates components that are statistically independent from one another. This is an improvement over PCA because correlation is a measure of linear independence between two variables but they may not be statistically independent of one another. ICA allows us to model a broader set of trends than PCA, which focuses on orthgonoality and linear relationships. It does so by maximizing the non-Gaussianity of the resulting components. Usually we perform PCA to 'whiten' the data and then perform ICA on it. 
+
+4. Non-Negative Matrix Factorization
+NMF fins the best set of coefficients that make the scores as close as possible to the original data with the constraint of non-negativity. This method is only usable on features that are greater than or equal to zero. This method is used often for text data where predictors are word counts, imaging, and biological measures.
+
+5. Partial Least Squares
+PLS is a supervised dimensionality reduction technique that uses response to guide finding the linear functions of the predictors having optimal covariance with the response. PLS tends to have fewer components so it can more effectively reduce dimension and save memory/computational time than PCA. 
+
+```{r}
+# step_pca() 
+# step_kpca()
+# step_kpca_poly()
+# step_kpca_rbf()
+# step_ica()
+# step_nnmf()
+# step_pls()
+
+library(caret)
+library(NMF)
+library(fastICA)
+library(tidymodels)
+library(kernlab)
+library(pls)
+library(RColorBrewer)
+library(leaflet)
+library(htmltools)
+library(dimRed)
+library(heatmaply)
+library(lobstr)
+
+# The memory requires for this script are about 8GB although see the note below
+# regarding NNMF (which can be much higher)
+mem_in_gb <- function() {
+  res <- as.numeric(mem_used()) * 1e-9
+  cat(round(res, 1), "GB\n")
+  invisible(NULL)
+}
+
+load("chicago.RData")
+
+weekends <- 
+  training %>% 
+  dplyr::filter(dow %in% c("Sat", "Sun")) %>%
+  dplyr::select(matches("l14_[0-9]"), s_40380)
+
+stations <- 
+  stations %>% 
+  mutate(terms = gsub("s_", "l14_", station_id))
+
+mem_in_gb()
+
+# Emulate the rolling origin forecast resampling but for weekends
+
+weekend_days <- train_days[training$dow %in% c("Sat", "Sun")]
+
+wend_slices <- createTimeSlices(weekend_days, initialWindow = 1600, horizon = 4, fixedWindow = FALSE)
+wend_ctrl <- ctrl
+wend_ctrl$index <- wend_slices$train
+wend_ctrl$indexOut <- wend_slices$test
+wend_ctrl$verboseIter <- FALSE
+wend_ctrl$allowParallel <- FALSE
+
+simple_rec <- recipe(s_40380 ~ ., data = weekends)
+
+set.seed(7599)
+simple_mod <- 
+  train(simple_rec, data = weekends, method = "lm", trControl = wend_ctrl) %>% 
+  pluck("resample") %>% 
+  mutate(model = "Original Predictors")
+
+mem_in_gb()
+
+pca_rec <- 
+  simple_rec %>%
+  step_center(matches("l14_[0-9]")) %>%
+  step_scale(matches("l14_[0-9]")) %>%
+  step_pca(matches("l14_[0-9]"), num_comp = 20)
+
+pca_rec_tr <- 
+  pca_rec %>%
+  prep(training = weekends, verbose = TRUE)
+
+pca_features <- juice(pca_rec_tr, matches("^PC"))
+
+pca_cor <- apply(pca_features, 2, cor, y = weekends$s_40380, method = "spearman")
+pca_cor <- pca_cor[order(-abs(pca_cor))]
+pca_cor
+
+mem_in_gb()
+
+# Compute the % variation for each component
+sds <- pca_rec_tr$steps[[3]]$res$sdev
+pct_var <- (sds^2)/sum(sds^2)*100
+cum_var <- cumsum(pct_var)
+
+# Get component values
+pca_coefs <- 
+  tidy(pca_rec_tr, number = 3) %>%
+  dplyr::select(-id) %>% 
+  spread(component, value) %>% 
+  dplyr::select(terms, PC1, PC2, PC3, PC4, PC5) %>%  
+  full_join(stations, by = "terms")
+
+# Get a different version used for the heatmap
+five_pca_coefs <- 
+  pca_coefs %>% 
+  as.data.frame() %>% 
+  na.omit()
+
+rownames(five_pca_coefs) <- five_pca_coefs$description
+
+five_pca_coefs <- 
+  five_pca_coefs %>%  
+  dplyr::select(starts_with("PC"))
+
+five_comps_range <-
+  tidy(pca_rec, number = 3) %>% 
+  mutate(value = abs(value)) %>% 
+  pull(value) %>% 
+  max(na.rm = TRUE)
+
+pca_mod <- 
+  train(pca_rec, data = weekends, method = "lm", trControl = wend_ctrl) %>% 
+  pluck("resample") %>% 
+  mutate(model = "PCA")
+
+rm(pca_rec, pca_rec_tr)
+
+mem_in_gb()
+
+# Determine a reasonable value for the radial basis function parameter sigma
+sig_range <- 
+  simple_rec %>%
+  step_center(matches("l14_[0-9]")) %>%
+  step_scale(matches("l14_[0-9]")) %>%
+  prep(training = weekends, verbose = TRUE) %>%
+  juice(matches("l14_[0-9]")) %>%
+  as.matrix() %>%
+  sigest(frac = 1) 
+
+kpca_rec <- 
+  simple_rec %>%
+  step_center(matches("l14_[0-9]")) %>%
+  step_scale(matches("l14_[0-9]")) %>%
+  step_kpca(
+    matches("l14_[0-9]"), 
+    num_comp = 20, 
+    options = list(kernel = "rbfdot", kpar = list(sigma = sig_range[2]))
+  ) 
+
+kpca_rec_tr <- 
+  kpca_rec %>%
+  prep(training = weekends, retain = TRUE, verbose = TRUE)
+
+kpca_features <- juice(kpca_rec_tr, matches("PC"))
+
+kpca_cor <- apply(kpca_features, 2, cor, y = weekends$s_40380, method = "spearman")
+kpca_cor <- kpca_cor[order(-abs(kpca_cor))]
+kpca_cor
+
+mem_in_gb()
+
+kpca_mod <- 
+  train(kpca_rec, data = weekends, method = "lm", trControl = wend_ctrl) %>% 
+  pluck("resample") %>% 
+  mutate(model = "kPCA")
+
+rm(kpca_rec, kpca_rec_tr)
+
+mem_in_gb()
+
+ica_start <- matrix(rnorm(20^2), nrow = 20)
+
+ica_rec <- 
+  simple_rec %>%
+  step_ica(
+    matches("l14_[0-9]"),
+    num_comp = 20,
+    options = list(
+      maxit = 1000,
+      tol = 1e-10,
+      alg.type = "deflation",
+      w.init = ica_start
+    )
+  ) 
+
+ica_rec_tr <- 
+  ica_rec %>%
+  prep(training = weekends, verbose = TRUE)
+
+ica_features <- juice(ica_rec_tr, matches("IC"))
+
+ica_cor <- apply(ica_features, 2, cor, y = weekends$s_40380, method = "spearman")
+ica_cor <- ica_cor[order(-abs(ica_cor))]
+ica_cor
+
+ica_coefs <- 
+  tidy(ica_rec_tr, number = 1) %>%
+  dplyr::select(-id) %>% 
+  spread(component, value) %>% 
+  dplyr::select(terms, IC01, IC02, IC03) %>%  
+  full_join(stations, by = "terms")
+
+mem_in_gb()
+
+ica_mod <- 
+  train(ica_rec, data = weekends, method = "lm", trControl = wend_ctrl) %>% 
+  pluck("resample") %>% 
+  mutate(model = "ICA")
+
+rm(ica_rec, ica_rec_tr)
+
+mem_in_gb()
+
+
+
+
+```
+
+## Other Dimensionality Reduction/Feature Engineering Methods
+
+1. Autoencoders
+It creates a nonlinear mapping between the original predictor data and a set of artificial features that is usually the same size. Then these new features become the new predictors. We should usually use a relatively small number of nodes in the hidden units to coerce the autoencoder to learn the crucial patterns in the predictors. 
+```{r}
+
+library(keras)
+library(tidymodels)
+library(caret)
+library(QSARdata)
+library(kknn)
+
+data(MeltingPoint)
+
+dat <- 
+  MP_Descriptors %>% 
+  mutate(mp = MP_Outcome)
+
+# Split the data to create a test set
+set.seed(1344)
+split_1 <- initial_split(dat, p = 1 - (75/nrow(dat)))
+split_1
+
+unlabeled <- analysis(split_1)
+labeled   <- assessment(split_1)
+
+set.seed(164)
+split_2 <- initial_split(labeled, p = 2/3)
+
+training_raw <- analysis(split_2)
+testing_raw  <- assessment(split_2)
+
+pp <- 
+  recipe(mp ~ ., data = unlabeled) %>%
+  step_zv(all_predictors()) %>%
+  step_corr(all_predictors(), threshold = .75) %>%
+  step_YeoJohnson(all_predictors()) %>%
+  step_center(all_predictors()) %>%
+  step_scale(all_predictors()) %>%
+  prep(training = unlabeled)
+
+unlabeled <- bake(pp, new_data = unlabeled, all_predictors(), composition = "matrix")
+training <- bake(pp, new_data = training_raw, all_predictors(), composition = "matrix")
+testing  <- bake(pp, new_data = testing_raw, all_predictors(), composition = "matrix")
+
+initial_model <- keras_model_sequential()
+initial_model %>%
+  layer_dense(
+    units = 512,
+    activation = "tanh",
+    input_shape = ncol(unlabeled),
+    kernel_initializer = keras::initializer_glorot_uniform(seed = 8167)
+  ) %>%
+  layer_dense(
+    units = 512,
+    activation = "tanh",
+    kernel_initializer = keras::initializer_glorot_uniform(seed = 12)
+  )  %>%
+  layer_dense(
+    units = ncol(unlabeled),
+    activation = "linear",
+    kernel_initializer = keras::initializer_glorot_uniform(seed = 8562)
+  ) 
+
+summary(initial_model)
+
+initial_model %>% 
+  compile(
+    loss = "mean_squared_error", 
+    optimizer = "adam"
+  )
+
+history <- 
+  initial_model %>% 
+  fit(
+    x = unlabeled, 
+    y = unlabeled, 
+    epochs = 500, 
+    batch_size = 100,
+    verbose = 0,
+    validation_split = 0.2
+  )
+
+# plot(history)
+
+iter_plot <- 
+  data.frame(
+    MSE = sqrt(history$metrics$val_loss),
+    Iteration = seq_along(history$metrics$val_loss)
+  ) %>%
+  ggplot(aes(x = Iteration, y = MSE)) + 
+  geom_point(cex = .5) + 
+  ggtitle("(a)") + 
+  ylab("RMSE (Validation Set)")
+
+final_model <- keras_model_sequential()
+final_model %>%
+  layer_dense(
+    units = 512,
+    activation = "tanh",
+    input_shape = ncol(unlabeled),
+    kernel_initializer = keras::initializer_glorot_uniform(seed = 8167)
+  ) %>%
+  layer_dense(
+    units = 512,
+    activation = "tanh",
+    kernel_initializer = keras::initializer_glorot_uniform(seed = 12)
+  )  %>%
+  layer_dense(
+    units = ncol(unlabeled),
+    activation = "linear",
+    kernel_initializer = keras::initializer_glorot_uniform(seed = 8562)
+  ) 
+summary(final_model)
+
+final_model %>% 
+  compile(
+    loss = "mean_squared_error", 
+    optimizer = "adam"
+  )
+
+rehistory <- 
+  final_model %>% 
+  fit(
+    x = unlabeled, 
+    y = unlabeled, 
+    epochs = 100, 
+    batch_size = 100,
+    verbose = 0,
+    validation_split = 0.2
+  )
+
+# check to make sure the same iterations were used
+head(history$metrics$val_loss)
+head(rehistory$metrics$val_loss)
+
+pred_train <- predict(final_model, training)
+pred_test  <- predict(final_model, testing)
+
+train_data <- 
+  pred_train %>% 
+  as.data.frame() %>% 
+  mutate(mp = training_raw$mp)
+
+test_data <- 
+  pred_test %>% 
+  as.data.frame() %>% 
+  mutate(mp = testing_raw$mp)
+
+ctrl <- trainControl(method = "repeatedcv", repeats = 10)
+
+knn_grid <- expand.grid(kmax = 1:15,
+                        distance = 2,
+                        kernel = c("rectangular"))
+
+set.seed(633)
+knn_orig <- train(mp ~ ., data = training_raw,
+                  method = "kknn",
+                  preProc = c("center", "scale", "zv"),
+                  tuneGrid = knn_grid,
+                  trControl = ctrl)
+
+set.seed(633)
+knn_auto <- train(mp ~ ., data = train_data,
+                  method = "kknn",
+                  preProc = c("center", "scale", "zv"),
+                  tuneGrid = knn_grid,
+                  trControl = ctrl)
+
+knn_plot <- 
+  knn_orig %>% 
+  pluck("results") %>% 
+  mutate(Predictors = "Original") %>% 
+  bind_rows(
+    knn_auto %>% 
+      pluck("results") %>% 
+      mutate(Predictors = "Autoencoded")
+  ) %>% 
+  mutate(
+    Predictors = factor(Predictors, levels = c("Original", "Autoencoded"))
+  ) %>% 
+  ggplot() + 
+  aes(x = kmax, y = RMSE, col = Predictors) +
+  geom_line() +
+  geom_point() +
+  ylab("RMSE (Repeated CV)") + 
+  xlab("# Neighbors") +
+  ggtitle("(b)") + 
+  scale_color_manual(values = c("grey", "black"))
+
+ae_compare <- compare_models(knn_orig, knn_auto)
+
+getTrainPerf(knn_orig)
+getTrainPerf(knn_auto)
+ae_compare
+mp_orig_test <- postResample(predict(knn_orig, testing_raw), testing_raw$mp)
+
+mp_encoded_test <- postResample(predict(knn_auto, train_data), train_data$mp)
+
+save(history, knn_orig, knn_auto, ae_compare, pp, mp_orig_test, mp_encoded_test,
+     file = "autoencoder.RData")
+
+```
+
+
+## Spatial Sign
+This method takes a set of predictor variables and transforms them in a way that the new values have the same distance to the center of distribution by projecting onto a multidimensional sphere. It is very effective at mitigating the damage of outliers.
+```{r}
+# step_spatialsign
+
+```
+
+## Distance and Depth
+```{r}
+# step_depth
+
+```
+
+
+# Remove Highly Correlated Variables
+Linear projection methods like above can correct collinearity, but directly removing them can also work.
+```{r}
+# step_corr()
+
+```
+# Remove Near Zero Variance
+```{r}
+# step_nzv()
+# step_zv()
+```
+
+
+
+
+

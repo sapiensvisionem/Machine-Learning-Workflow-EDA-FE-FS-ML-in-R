@@ -1,0 +1,162 @@
+---
+title: "Featuring Engineering - Missing Data"
+author: "Ji Hun Lee"
+date: "April 28, 2020"
+output: html_document
+---
+
+# Feature Engineering Order of Steps
+While problems needs may vary, here is an order of potential steps that should work for most problems:
+
+1. *Impute*
+2. Individual transformations for skewness and other issues
+3. Discretize (if needed and if you have no other choice)
+4. Create dummy variables, Feature Hashing, Category Encoding
+5. Create interactions
+6. Normalization steps (center, scale, range, etc)
+7. Multivariate transformation (e.g. PCA, Autoencoder, spatial sign, etc)
+8. Embedding
+
+
+## Load Libraries
+
+```{r}
+library(embed)
+library(FeatureHashing)
+library(tidyverse)
+library(tidymodels)
+```
+
+## TidyModel Main Functions 
+1. recipe: create a preprocessing object
+2. step_X: preprocessing functions
+3. prep: fit a recipe object to data to obtain parameters
+4. bake/juice: transform data using fitted recipe
+
+### Preprocessing Functions
+```{r}
+ls("package:recipes", pattern = "^step_")
+```
+
+# Missing Value Problem
+Missing values are intolerable in many kinds of predictive models. It is the first thing to be addressed in any project. 
+
+It is important to answer 'why are data missing?' When this question cannot be answered, we need to investigate three possible causes:
+1. structural deficiencies - missing component of predictor that was omitted from data. This is the case when missing values mean something
+2. random occurrence
+  a. missing completely at random (likelihood of missing result is equal for all data points); missing values are independent of the data and this is the best case scenario. 
+  b. missing at random: likelihood of missing results is not equal for all data points. the probability of a missing result depends on the observed data but not on the unobserved dta. Unfortunately, it is impsosible to distinguish between the two cases.
+3. specific cause (not missing at random): missingness is due to a specific cause. E.g. patient drops out of experiment. This is the most challenging to handle and imputation techniques may or may not be good.
+
+# Visualizing Missingness to Understand the Problem
+For small or medium dataset, visualization and numeric summaries are an important tool for implementing appropriate feature engineering techniques. For big data, the missing information must be appropriately condensed and visualized. 
+
+1) Heatmap of missing vs complete by color
+
+2) Co-occurrence  displays the frequencies of the most common missing predictor combinations
+
+3) x1 vs X2 scatterplot and rug margins to show where the other predictor is missing 
+
+4) When data is big! predictor matrix -> binary missing value matrix -> transpose (resulting dimensions capture variation caused by thep resence of missing values across predictors) -> PCA: the initial dimensions capture variation caused by the presence of missing values. Samples that do not have any missin values will be projected onto the same location close to the origin. Alternatively, samples with missing values will be projected away from the origin.
+  - scatterplot of the first two row/column scores from a binary representation of missing values for the data to identify the patterns of missingness over data; let size of the symbol depict the amount of missing data
+  
+5) numerical summaries of missing ness on columns and rowss
+
+
+# Remove missing values
+Usually samples are more important than predictors especially when samples are hard to collect. 
+However, we should be concerned that removing samples can bias the model.
+```{r}
+step_naomit
+```
+
+
+# Unknown Category
+Missingness may be an important predictor in itself. The fact that something is going on is important and this encoding can help identify its occurrence. However, we should not assume any cause-and-effect relationship from this.
+```{r}
+step_unknown()
+
+```
+
+
+# Imputation
+We can impute or estimate missing values. We use information and relationships among the non-missing predictors to provide an estimate to fill in the missing value. 
+It should occur prior to any steps involving parameter estimation and should always be the first step in any preprocessing sequence.
+20% missing values within a a column might be a good line of dignity to observe.
+Some important characteristics within a predictive imputation method:
+- tolerant of other missing data
+- must be fast
+- not be influenced by outliers
+```{r}
+library(caret)
+library(tidymodels)
+library(ipred)
+# step_bagimpute()
+# step_lowerimpute()
+# step_knnimpute()
+# step_meanimpute()
+# step_medianimpute()
+# step_modeimpute()
+# step_rollimpute()
+
+data(scat)
+scat_missing <- 
+  scat %>%
+  mutate(
+    was_missing = ifelse(is.na(Diameter)| is.na(Mass), "yes", "no"),
+    was_missing = factor(was_missing, levels = c("yes", "no"))
+  )
+
+# Impute with K-nearest neighbors
+
+imp_knn <- 
+  recipe(Species ~ ., data = scat) %>%
+  step_knnimpute(Diameter, Mass, 
+                 impute_with = 
+                   imp_vars(Month, Year, Site, Location, 
+                            Age, Number, Length, ropey,
+                            segmented, scrape)) %>%
+  prep(training = scat, retain = TRUE) %>%
+  juice(Diameter, Mass) %>% 
+  set_names(c("diam_imp", "mass_imp")) %>%
+  mutate(method = "5-Nearest Neighbors")
+
+scat_knn <- bind_cols(scat_missing, imp_knn)
+
+# Fit the models like this to get the out-of-bag estimates of performance. 
+# step_bagimpute could also be used. 
+set.seed(3453)
+diam_fit <- bagging(Diameter ~  ., data = scat[, -1],
+                    nbagg = 50, coob = TRUE)
+diam_res <- getModelInfo("treebag")[[1]]$oob(diam_fit)
+
+set.seed(3453)
+mass_fit <- bagging(Mass ~  ., data = scat[, -1],
+                    nbagg = 50, coob = TRUE)
+mass_res <- getModelInfo("treebag")[[1]]$oob(mass_fit)
+
+scat_bag <- 
+  scat_missing %>%
+  mutate(method = "Bagged Tree",
+         diam_imp = Diameter, mass_imp = Mass)
+scat_bag$diam_imp[is.na(scat_bag$Diameter)] <- 
+  predict(diam_fit, scat[is.na(scat$Diameter),])
+scat_bag$mass_imp[is.na(scat_bag$Mass)] <- 
+  predict(mass_fit, scat[is.na(scat$Mass),])
+
+imputed <- bind_rows(scat_knn, scat_bag)
+
+ggplot(imputed, aes(col = was_missing)) + 
+  geom_point(aes(x = diam_imp, y = mass_imp), alpha = .5, cex = 2) + 
+  geom_rug(data = imputed[is.na(imputed$Mass),], 
+           aes(x = Diameter), 
+           sides = "b",
+           lwd = 1) + 
+  geom_rug(data = imputed[is.na(imputed$Diameter),], 
+           aes(y = Mass), 
+           sides = "l",
+           lwd = 1) + 
+  theme(legend.position = "top") + 
+  xlab("Diameter") + ylab("Mass") + 
+  facet_wrap(~method)
+

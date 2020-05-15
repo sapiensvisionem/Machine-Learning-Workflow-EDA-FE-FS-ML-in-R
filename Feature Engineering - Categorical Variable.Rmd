@@ -1,0 +1,325 @@
+---
+title: "Feature Engineering - Categorical Variable"
+author: "Ji Hun Lee"
+date: "April 28, 2020"
+output: html_document
+---
+
+# Feature Engineering Order of Steps
+While problems needs may vary, here is an order of potential steps that should work for most problems:
+
+1. Impute
+2. Individual transformations for skewness and other issues
+3. Discretize (if needed and if you have no other choice)
+4. *Create dummy variables*, *Feature Hashing*, *Category Encoding*
+5. Create interactions
+6. Normalization steps (center, scale, range, etc)
+7. Multivariate transformation (e.g. PCA, spatial sign, etc)
+8. *Embedding*
+
+
+## Load Libraries
+
+```{r}
+library(embed)
+library(FeatureHashing)
+library(tidyverse)
+library(tidymodels)
+```
+
+## TidyModel Main Functions 
+1. recipe: create a preprocessing object
+2. step_X: preprocessing functions
+3. prep: fit a recipe object to data to obtain parameters
+4. bake/juice: transform data using fitted recipe
+
+### Preprocessing Functions
+```{r}
+ls("package:recipes", pattern = "^step_")
+```
+
+# Data
+Load Data: OKCupid
+```{r}
+load("C:/Users/jihun/Downloads/okc.RData")
+load("C:/Users/jihun/Downloads/okc_binary.RData")
+
+glimpse(okc_train)
+```
+
+# Categorical Variable
+
+
+
+## Dummy Encoding
+The most basic appoach is to create dummy/indicator variables, i.e. artificial numeric variables capturing one aspect of categorical values.
+
+Using mathematical function called contrast/parameterization function, we convert all the possible values into k-1 binary dummy values.
+
+There are two contrast functions.
+
+One is treatment/reference contrast - where one value of predictor is left unaccounted in dummy variables. We leave one out because it can be inferred, and otherwise it can create a singualr design matrix. 
+
+However, sometimes it may be advantageous to create all dummy values for models insensitive to linear dependencies like glm or tree models. It is also useful for interpretative purposes.
+
+```{r}
+recipe(Class ~ ., data=okc_train) %>%
+  step_dummy(religion) %>% # one_hot = TRUE
+  prep(training=okc_train) %>%
+  juice() %>%
+  head(5)
+
+```
+
+Another contrast function is 'cell means' parameterization. It does not include intercept, and avoid the problem of singularity. Estimate for each dummy variable corresonds to average value of each category. 
+```{r}
+param <- getOption("contrasts")
+go_helmert <- param
+go_helmert["unordered"] <- "contr.helmert"
+options(contrasts = go_helmert)
+step_dummy
+```
+
+## Label Encoding
+
+```{r}
+step_integer
+```
+
+### Near-Zero Variance Categories
+This can cause long tail istributions that are too infreqeuently observed, and in resampling process, it will exclcude rarer categories. We should exclude zero-variance predictors because there is no variation displayed by predictor.
+
+We should remove ner-zero variance predictors
+```{r}
+recipe(Class ~ ., data=okc_train) %>%
+  step_dummy(religion) %>% # one_hot = TRUE
+  step_zv() %>%
+  prep(training=okc_train) %>%
+  juice() %>%
+  head(5)
+
+```
+
+## Novel Categories
+
+Or you can create the 'other' category. It should occur during resampling so that the final estimates   
+
+```{r}
+step_novel
+```
+
+## Recategorize 
+```{r}
+step_relevel
+```
+
+## Feature Hashing for Too Many Categories
+
+When predictor has so many categories, it can produce overabundance of dummy variables. Data matrix can be overdetermined and restrict the use of certain models. 
+```{r}
+
+step_other
+```
+
+Or we can also use hashing function that maps one set of values to another set of values. It reduces the number of categories.
+```{r}
+sample_towns <- c(
+  'alameda', 'belmont', 'benicia', 'berkeley', 'castro_valley', 'daly_city', 
+  'emeryville', 'fairfax', 'martinez', 'menlo_park', 'mountain_view', 'oakland', 
+  'other', 'palo_alto', 'san_francisco', 'san_leandro', 'san_mateo', 
+  'san_rafael', 'south_san_francisco', 'walnut_creek'
+)
+
+location <- 
+  okc_train %>% 
+  dplyr::select(where_town) %>% 
+  distinct(where_town) %>% 
+  arrange(where_town)
+
+# Create hash features using binary representations
+binary_hashes <-
+  hashed.model.matrix(
+    ~ where_town,
+    data = location,
+    hash.size = 2 ^ 4,
+    signed.hash = FALSE,
+    create.mapping = TRUE
+  )
+binary_mapping <- hash.mapping(binary_hashes)
+names(binary_mapping) <- str_remove(names(binary_mapping), "where_town")
+binary_calcs <- 
+  binary_mapping %>% 
+  enframe() %>% 
+  set_names(c("town", "column_num_16")) %>% 
+  mutate(integer_16 = hashed.value(names(binary_mapping))) %>% 
+  dplyr::filter(town %in% sample_towns) %>% 
+  arrange(town)
+
+binary_calcs
+
+binary_df <- 
+  binary_hashes %>% 
+  as.matrix() %>% 
+  as_tibble() %>% 
+  bind_cols(location) %>% 
+  dplyr::rename(town = where_town) %>% 
+  dplyr::filter(town %in% sample_towns) %>% 
+  arrange(town)
+
+binary_df
+
+# Create hash features using signed integer representations
+
+signed_hashes <-
+  hashed.model.matrix(
+    ~ where_town,
+    data = location,
+    hash.size = 2 ^ 4,
+    signed.hash = TRUE
+  )
+
+signed_df <- 
+  signed_hashes %>% 
+  as.matrix() %>% 
+  as_tibble() %>% 
+  bind_cols(location) %>% 
+  dplyr::rename(town = where_town) %>% 
+  dplyr::filter(town %in% sample_towns) %>% 
+  arrange(town)
+
+signed_df
+
+
+```
+
+# Supervised Encoding
+
+We can also use supervised encoding to create 
+
+```{r}
+
+# Partial pooling example ------------------------------------------------------
+
+partial_rec <- 
+  recipe(Class ~ ., data = okc_train) %>%
+  step_lencode_bayes(
+    where_town,
+    outcome = vars(Class),
+    verbose = FALSE,
+    options = list(
+      chains = 5, 
+      iter = 1000, 
+      cores = min(parallel::detectCores(), 5),
+      seed = 18324
+    )
+  ) %>%
+  prep()
+
+# Get raw rates and log-odds
+okc_props <- 
+  okc_train %>%
+  group_by(where_town) %>%
+  summarise(
+    rate = mean(Class == "stem"),
+    raw  = log(rate/(1-rate)),
+    n = length(Class)
+  ) %>%
+  mutate(where_town = as.character(where_town))
+
+okc_props
+
+# Embedding methods ------------------------------------------------------------
+
+# Get the keyword columns
+keywords <- names(okc_train_binary)[-1]
+
+# Merge the basic OkC data with the keyword indicators
+okc_embed <-
+  okc_train %>% 
+  dplyr::select(Class, where_town, profile) %>%
+  full_join(okc_train_binary, by = "profile")
+
+# Tensorflow wants doubles instead of binary integers
+okc_embed[, keywords] <- apply(okc_embed[, keywords], 2, as.numeric)
+
+# Use the entity embedding for supervised learning
+set.seed(355)
+nnet_rec <- 
+  recipe(Class ~ ., data = okc_embed) %>% 
+  step_embed(
+    where_town,
+    outcome = vars(Class),
+    num_terms = 3,
+    hidden_units = 10,
+    predictors = vars(!!!keywords),
+    options = embed_control(
+      loss = "binary_crossentropy",
+      epochs = 30,
+      validation_split = 0.2,
+      verbose = 0
+    )
+  ) %>%
+  prep()
+# Organize results -------------------------------------------------------------
+
+partial_pooled <- 
+  tidy(partial_rec, number = 1) %>%
+  dplyr::select(-terms, -id) %>%
+  setNames(c("where_town", "partial"))
+
+word_embed <- 
+  tidy(nnet_rec, number = 1) %>%
+  dplyr::select(-terms, -id) %>%
+  setNames(c(paste0("Feature", 1:3), "where_town"))
+
+all_est <- 
+  partial_pooled %>%
+  full_join(okc_props, by = "where_town") %>%
+  inner_join(word_embed, by = "where_town") %>%
+  dplyr::select(where_town, rate, n, raw, partial, Feature1, Feature2, Feature3)
+
+odds_rng <- extendrange(c(all_est$raw, all_est$partial), f = 0.01)
+
+odds_1 <- 
+  ggplot(all_est) +
+  aes(x = raw, y = partial, size = log10(n)) + 
+  scale_size(range = c(.1, 6)) +
+  geom_abline(alpha = .4, lty = 2)  +
+  xlim(odds_rng) +
+  ylim(odds_rng) +
+  xlab("Raw Log-Odds") +
+  ylab("Shrunken Log-Odds") + 
+  geom_point(aes(text = gsub("_", " ", where_town)), alpha = .4)
+
+
+odds_2 <- 
+  ggplot(all_est) +
+  aes(x = .5*(raw + partial), y = raw - partial, size = log10(n)) + 
+  scale_size(range= c(.1, 6)) + 
+  geom_hline(alpha = .4, lty = 2, yintercept = 0) + 
+  xlab("Average Estimate") +
+  ylab("Raw - Shrunken") + 
+  geom_point(aes(text = gsub("_", " ", where_town)), alpha = .4)
+
+odds_1 <- ggplotly(odds_1, tooltip = "text")
+odds_2 <- ggplotly(odds_2, tooltip = "text") 
+
+plotly::subplot(odds_1, odds_2, nrows = 1, margin = .05, titleX = TRUE, titleY = TRUE)
+
+embed_plot <- 
+  word_embed %>%
+  full_join(okc_props, by = "where_town") %>%
+  gather(feature, value, -rate, -raw, -n, -where_town) %>%
+  mutate(location = gsub("_", " ", where_town)) %>%
+  ggplot(aes(x = value, y = raw)) + 
+  facet_wrap(~feature, scale = "free_x") + 
+  ylab("Raw Odds-Ratio") + 
+  theme(legend.position = "top") + 
+  xlab("Feature Value") + 
+  scale_size(range = c(.1, 6)) + 
+  geom_point(aes(size = log10(n), text = location), alpha = .4)
+
+ggplotly(embed_plot, tooltip = "text")
+
+
+```
