@@ -50,7 +50,7 @@ This post deals with machine learning problem of prediction. The goal of this do
 
     Using Caret library in R, I created a wrapper function that automates regression with a single line of code. It takes in two arguments: data and location where it will store results in csv and rds format. The function runs 30 different statistical and machine learning algorithms from linear regression to neural network. The function returns the following four items in the given location:
 
-      a. summary table of evaluation metrics (R-squared, RMSE) of every regression model on test set
+      a. summary table of evaluation metrics (R-squared, RMSE) of every regression model on test set/summary table of evaluation metrics (accuracy, precision/recall, sensitivity/specificity, AUC, Kappa, etc) of every classification model on test set
 
       b. predicted outputs of every regression model on test set
 
